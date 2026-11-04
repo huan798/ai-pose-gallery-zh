@@ -85,7 +85,7 @@ export interface RecipeState {
   extraImages?: ExtraReferenceImage[]
 }
 
-export type ImageProviderId = 'gemini' | 'gpt' | 'qwen' | 'doubao' | 'comfyui'
+export type ImageProviderId = 'gemini' | 'gpt' | 'qwen' | 'doubao' | 'grsai' | 'comfyui'
 
 export interface ProviderEndpointConfig {
   baseUrl: string
@@ -150,6 +150,17 @@ export interface DoubaoParams {
   responseFormat: 'b64_json' | 'url'
 }
 
+export interface GrsaiParams {
+  /** 宽高比：nano-banana 系列用 "1:1" 等比例；gpt-image 系列自动换算为 "1024x1024" 等尺寸 */
+  aspectRatio: 'auto' | '1:1' | '3:4' | '4:3' | '9:16' | '16:9'
+  /** nano-banana 系列分辨率档位 */
+  imageSize: '1K' | '2K' | '4K'
+  /** gpt-image 系列画质档位 */
+  quality: 'auto' | 'low' | 'medium' | 'high'
+  /** 异步任务轮询超时秒数 */
+  timeoutSec: number
+}
+
 export interface ApiConfig {
   activeProvider: ImageProviderId
   imagePassMode: ImagePassMode
@@ -161,6 +172,7 @@ export interface ApiConfig {
   geminiParams: GeminiParams
   qwenParams: QwenParams
   doubaoParams: DoubaoParams
+  grsaiParams: GrsaiParams
   comfyuiParams: ComfyUiParams
 }
 

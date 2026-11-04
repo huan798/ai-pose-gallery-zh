@@ -83,6 +83,21 @@ export const PROVIDER_META: Record<
       { value: 'custom', label: '自定义模型 ID / Endpoint' },
     ],
   },
+  grsai: {
+    id: 'grsai',
+    name: 'Grsai 聚合',
+    shortName: 'Grsai',
+    // 默认走国内节点；全球节点为 https://grsaiapi.com
+    defaultBaseUrl: 'https://grsai.dakka.com.cn',
+    docUrl: 'https://qmy27nhsd9.apifox.cn/452392911e0',
+    models: [
+      { value: 'nano-banana-2', label: 'nano-banana-2（Gemini 图像）' },
+      { value: 'nano-banana', label: 'nano-banana' },
+      { value: 'gpt-image-2.5', label: 'gpt-image-2.5' },
+      { value: 'gpt-image-2', label: 'gpt-image-2' },
+      { value: 'custom', label: '自定义模型 ID' },
+    ],
+  },
   comfyui: {
     id: 'comfyui',
     name: '本地 ComfyUI',
@@ -412,6 +427,9 @@ async function smartFetch(
 }
 
 function extractUniversalImage(json: any): string | null {
+  // 0. Grsai 聚合接口: results[0].url
+  if (json?.results?.[0]?.url) return json.results[0].url
+
   // 1. OpenAI / Doubao Seedream standard: data[0].b64_json or data[0].url
   if (json?.data?.[0]?.b64_json) return `data:image/png;base64,${json.data[0].b64_json}`
   if (json?.data?.[0]?.url) return json.data[0].url
@@ -1825,7 +1843,7 @@ export async function generateCharacterImage(params: {
   // =========================================================================
   // 协议 4: 字节火山方舟 Doubao Seedream (/api/v3/images/generations)
   // =========================================================================
-  else {
+  else if (provider === 'doubao') {
     const db = config.doubaoParams
     let endpoint = baseUrl
     if (!endpoint.endsWith('/images/generations')) {
@@ -1857,6 +1875,82 @@ export async function generateCharacterImage(params: {
       config.useProxy
     )
     json = await res.json()
+  }
+  // =========================================================================
+  // 协议 5: Grsai 聚合接口 (/v1/api/generate + /v1/api/result 异步轮询)
+  // =========================================================================
+  else if (provider === 'grsai') {
+    const gs = config.grsaiParams
+    const timeoutSec = Math.max(30, gs.timeoutSec || 300)
+    const isGptImage = /^gpt-image/i.test(model)
+    const body: Record<string, any> = {
+      model,
+      prompt,
+      images: allImageRefs,
+      replyType: 'json',
+    }
+    if (isGptImage) {
+      // gpt-image 系列要求 "1024x1024" 式尺寸，由宽高比换算
+      const sizeMap: Record<string, string> = {
+        '1:1': '1024x1024',
+        '3:4': '1024x1536',
+        '4:3': '1536x1024',
+        '9:16': '1024x1536',
+        '16:9': '1536x1024',
+      }
+      body.aspectRatio = gs.aspectRatio === 'auto' ? '1024x1024' : (sizeMap[gs.aspectRatio] ?? '1024x1024')
+      if (gs.quality !== 'auto') body.quality = gs.quality
+    } else {
+      // nano-banana 系列使用比例 + 分辨率档位
+      body.aspectRatio = gs.aspectRatio === 'auto' ? '1:1' : gs.aspectRatio
+      body.imageSize = gs.imageSize
+    }
+
+    res = await smartFetch(
+      `${baseUrl}/v1/api/generate`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify(body),
+      },
+      config.useProxy
+    )
+    json = await res.json()
+
+    // 异步任务：status 非 succeeded 时携带 id 轮询 /v1/api/result
+    if (res.ok && json?.id && json?.status && json.status !== 'succeeded') {
+      const deadline = Date.now() + timeoutSec * 1000
+      while (Date.now() < deadline) {
+        if (params.signal?.aborted) throw new Error('生成已取消')
+        await new Promise((resolve) => setTimeout(resolve, 3000))
+        onProgress?.({ stage: 'queue', message: 'Grsai 正在生成，轮询任务结果…' })
+        const pollRes = await smartFetch(
+          `${baseUrl}/v1/api/result?id=${encodeURIComponent(json.id)}`,
+          {
+            method: 'GET',
+            headers: { Authorization: `Bearer ${apiKey}` },
+          },
+          config.useProxy
+        )
+        const pollJson = await pollRes.json().catch(() => null)
+        if (!pollRes.ok || !pollJson) {
+          throw new Error(`[Grsai] 查询任务结果失败 (HTTP ${pollRes.status})`)
+        }
+        json = pollJson
+        if (json.status === 'succeeded') break
+        if (json.status === 'failed') {
+          throw new Error(`[Grsai] 任务生成失败：${json.error || '未知错误'}`)
+        }
+      }
+      if (json?.status !== 'succeeded') {
+        throw new Error(`[Grsai] 任务超时（${timeoutSec}s），任务编号 ${json?.id ?? '未知'}，请稍后在平台查询`)
+      }
+    }
+  } else {
+    throw new Error(`不支持的图像接口协议：${provider}`)
   }
 
   if (!res.ok) {

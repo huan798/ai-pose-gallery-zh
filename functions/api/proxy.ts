@@ -21,6 +21,8 @@ const DEFAULT_ALLOWED_ORIGINS = [
   'https://ark.cn-beijing.volces.com', // 火山方舟 / Doubao
   'https://generativelanguage.googleapis.com', // Google Gemini
   'https://api.openai.com', // OpenAI
+  'https://grsaiapi.com', // Grsai 全球节点
+  'https://grsai.dakka.com.cn', // Grsai 国内节点
 ]
 
 function matchOriginRule(target: URL, rawRule: string): boolean {
@@ -137,6 +139,49 @@ export const onRequestPost = async (context: { request: Request; env?: ProxyEnv 
     if (err instanceof BodyTooLargeError) {
       return jsonResponse(413, `Request body exceeds ${MAX_BODY_BYTES} bytes`)
     }
+    return jsonResponse(502, err instanceof Error ? err.message : 'Upstream proxy error')
+  }
+}
+
+/**
+ * GET 转发：用于 Grsai 等聚合平台的异步任务结果轮询 (/v1/api/result?id=...)。
+ * 目标地址同样通过 x-target-url 头传入，仅放行白名单内的 https 上游。
+ */
+export const onRequestGet = async (context: { request: Request; env?: ProxyEnv }) => {
+  const { request, env } = context
+
+  const targetUrl = request.headers.get('x-target-url')
+  if (!targetUrl) return jsonResponse(400, 'Missing x-target-url header')
+
+  let target: URL
+  try {
+    target = new URL(targetUrl)
+  } catch {
+    return jsonResponse(400, 'Invalid x-target-url header')
+  }
+
+  if (target.protocol !== 'https:' || !isOriginAllowed(target, env?.PROXY_ALLOWED_ORIGINS)) {
+    return jsonResponse(403, 'Target origin not allowed')
+  }
+
+  const forwardHeaders = new Headers()
+  for (const key of ['authorization']) {
+    const val = request.headers.get(key)
+    if (val) forwardHeaders.set(key, val)
+  }
+
+  try {
+    const upstream = await fetch(target.toString(), {
+      method: 'GET',
+      headers: forwardHeaders,
+    })
+    return new Response(upstream.body, {
+      status: upstream.status,
+      headers: {
+        'Content-Type': upstream.headers.get('content-type') || 'application/json; charset=utf-8',
+      },
+    })
+  } catch (err) {
     return jsonResponse(502, err instanceof Error ? err.message : 'Upstream proxy error')
   }
 }

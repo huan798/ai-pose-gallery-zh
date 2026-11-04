@@ -40,6 +40,7 @@ import type {
   GenerationHistoryItem,
   GenerationSnapshot,
   GptParams,
+  GrsaiParams,
   ImageProviderId,
   PortraitItem,
   PoseItem,
@@ -58,7 +59,7 @@ const SAFE_MODE_KEY = 'pose_atlas_safe_mode_v1'
 const COMFY_CONFIG_VERSION = 3
 
 const shouldEnableProxyByDefault = (provider?: ImageProviderId) =>
-  provider === 'qwen' || provider === 'doubao'
+  provider === 'qwen' || provider === 'doubao' || provider === 'grsai'
 
 const DEFAULT_API_CONFIG: ApiConfig = {
   activeProvider: 'gemini',
@@ -89,6 +90,12 @@ const DEFAULT_API_CONFIG: ApiConfig = {
       baseUrl: PROVIDER_META.doubao.defaultBaseUrl,
       apiKey: '',
       model: PROVIDER_META.doubao.models[0].value,
+      customModel: '',
+    },
+    grsai: {
+      baseUrl: PROVIDER_META.grsai.defaultBaseUrl,
+      apiKey: '',
+      model: PROVIDER_META.grsai.models[0].value,
       customModel: '',
     },
     comfyui: {
@@ -124,6 +131,12 @@ const DEFAULT_API_CONFIG: ApiConfig = {
     sequentialImageGeneration: 'disabled',
     watermark: false,
     responseFormat: 'b64_json',
+  },
+  grsaiParams: {
+    aspectRatio: '3:4',
+    imageSize: '2K',
+    quality: 'auto',
+    timeoutSec: 300,
   },
   comfyuiParams: {
     workflowPreset: DEFAULT_COMFY_PRESET,
@@ -185,12 +198,14 @@ function mergeStoredConfig(raw: unknown): ApiConfig {
       gpt: { ...DEFAULT_API_CONFIG.providers.gpt, ...obj.providers?.gpt },
       qwen: { ...DEFAULT_API_CONFIG.providers.qwen, ...obj.providers?.qwen },
       doubao: { ...DEFAULT_API_CONFIG.providers.doubao, ...obj.providers?.doubao },
+      grsai: { ...DEFAULT_API_CONFIG.providers.grsai, ...obj.providers?.grsai },
       comfyui: comfy.provider,
     },
     gptParams: { ...DEFAULT_API_CONFIG.gptParams, ...obj.gptParams },
     geminiParams: { ...DEFAULT_API_CONFIG.geminiParams, ...obj.geminiParams },
     qwenParams: { ...DEFAULT_API_CONFIG.qwenParams, ...obj.qwenParams },
     doubaoParams: { ...DEFAULT_API_CONFIG.doubaoParams, ...obj.doubaoParams },
+    grsaiParams: { ...DEFAULT_API_CONFIG.grsaiParams, ...obj.grsaiParams },
     comfyuiParams: comfy.params,
   }
 }
@@ -242,6 +257,7 @@ interface StudioContextValue {
   updateGeminiParams: (patch: Partial<GeminiParams>) => void
   updateQwenParams: (patch: Partial<QwenParams>) => void
   updateDoubaoParams: (patch: Partial<DoubaoParams>) => void
+  updateGrsaiParams: (patch: Partial<GrsaiParams>) => void
   updateComfyUiParams: (patch: Partial<ComfyUiParams>) => void
   addHistory: (item: Omit<GenerationHistoryItem, 'id' | 'createdAt'>) => void
   removeHistoryItem: (id: string) => void
@@ -585,6 +601,10 @@ export function StudioProvider({ children }: { children: ReactNode }) {
     setApiConfig((prev) => ({ ...prev, doubaoParams: { ...prev.doubaoParams, ...patch } }))
   }
 
+  const updateGrsaiParams = (patch: Partial<GrsaiParams>) => {
+    setApiConfig((prev) => ({ ...prev, grsaiParams: { ...prev.grsaiParams, ...patch } }))
+  }
+
   const updateComfyUiParams = (patch: Partial<ComfyUiParams>) => {
     setApiConfig((prev) => ({ ...prev, comfyuiParams: { ...prev.comfyuiParams, ...patch } }))
   }
@@ -763,6 +783,7 @@ export function StudioProvider({ children }: { children: ReactNode }) {
         updateGeminiParams,
         updateQwenParams,
         updateDoubaoParams,
+        updateGrsaiParams,
         updateComfyUiParams,
         addHistory,
         removeHistoryItem,

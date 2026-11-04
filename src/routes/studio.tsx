@@ -67,6 +67,7 @@ import type {
   GeminiParams,
   GenerationHistoryItem,
   GptParams,
+  GrsaiParams,
   ImagePassMode,
   ImageProviderId,
   QwenParams,
@@ -77,7 +78,7 @@ export const Route = createFileRoute('/studio')({
   component: StudioPage,
 })
 
-const PROVIDER_LIST: ImageProviderId[] = ['gemini', 'gpt', 'qwen', 'doubao', 'comfyui']
+const PROVIDER_LIST: ImageProviderId[] = ['gemini', 'gpt', 'qwen', 'doubao', 'grsai', 'comfyui']
 
 function StudioPage() {
   const {
@@ -106,6 +107,7 @@ function StudioPage() {
     updateGeminiParams,
     updateQwenParams,
     updateDoubaoParams,
+    updateGrsaiParams,
     updateComfyUiParams,
     randomizeRecipe,
     randomizeSlot,
@@ -1320,6 +1322,66 @@ function StudioPage() {
                         <SelectContent>
                           <SelectItem value="b64_json">b64_json</SelectItem>
                           <SelectItem value="url">url</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </Field>
+                  </>
+                )}
+
+                {activeProvider === 'grsai' && (
+                  <>
+                    <Field label="宽高比 (aspectRatio)">
+                      <Select
+                        value={apiConfig.grsaiParams.aspectRatio}
+                        onValueChange={(v) =>
+                          updateGrsaiParams({ aspectRatio: v as GrsaiParams['aspectRatio'] })
+                        }
+                      >
+                        <SelectTrigger className="w-full">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="auto">auto（跟随参考图）</SelectItem>
+                          <SelectItem value="3:4">3:4 竖版</SelectItem>
+                          <SelectItem value="1:1">1:1 方形</SelectItem>
+                          <SelectItem value="4:3">4:3 横版</SelectItem>
+                          <SelectItem value="9:16">9:16 全屏竖版</SelectItem>
+                          <SelectItem value="16:9">16:9 宽屏</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </Field>
+                    <Field label="分辨率档位 (imageSize · nano-banana 系列)">
+                      <Select
+                        value={apiConfig.grsaiParams.imageSize}
+                        onValueChange={(v) =>
+                          updateGrsaiParams({ imageSize: v as GrsaiParams['imageSize'] })
+                        }
+                      >
+                        <SelectTrigger className="w-full">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="1K">1K</SelectItem>
+                          <SelectItem value="2K">2K</SelectItem>
+                          <SelectItem value="4K">4K</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </Field>
+                    <Field label="画质档位 (quality · gpt-image 系列)">
+                      <Select
+                        value={apiConfig.grsaiParams.quality}
+                        onValueChange={(v) =>
+                          updateGrsaiParams({ quality: v as GrsaiParams['quality'] })
+                        }
+                      >
+                        <SelectTrigger className="w-full">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="auto">auto</SelectItem>
+                          <SelectItem value="low">low</SelectItem>
+                          <SelectItem value="medium">medium</SelectItem>
+                          <SelectItem value="high">high</SelectItem>
                         </SelectContent>
                       </Select>
                     </Field>
