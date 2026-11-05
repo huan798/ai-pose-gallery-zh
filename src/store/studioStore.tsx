@@ -13,6 +13,7 @@ import {
 } from '@/components/ui/alert-dialog'
 import { useComfyConnection, type ComfyConnectionState } from './useComfyConnection'
 import { idbRead, idbWrite } from '@/lib/idbStorage'
+import { safeRandomUUID } from '@/lib/utils'
 import { parseParameterWorkflow, workflowIdentity } from '@/lib/comfyWorkflowParameters'
 import { durableImage, snapshotGeneration } from '@/lib/generationSnapshot'
 import { recipeBackup } from '@/lib/recipeImages'
@@ -620,7 +621,7 @@ export function StudioProvider({ children }: { children: ReactNode }) {
     return write
   }
   const addHistory = (item: Omit<GenerationHistoryItem, 'id' | 'createdAt'>) => {
-    void persistHistory((current) => [{ ...item, id: crypto.randomUUID(), createdAt: Date.now() }, ...current].slice(0, 30)).catch(() => toast.error('历史记录保存失败'))
+    void persistHistory((current) => [{ ...item, id: safeRandomUUID(), createdAt: Date.now() }, ...current].slice(0, 30)).catch(() => toast.error('历史记录保存失败'))
   }
   const removeHistoryItem = (id: string) => {
     void persistHistory((current) => current.filter((x) => x.id !== id)).then(() => toast.success('已删除该条记录')).catch(() => toast.error('删除失败'))
@@ -649,7 +650,7 @@ export function StudioProvider({ children }: { children: ReactNode }) {
     const imageUrl = await durableImage(result.imageUrl)
     signal.throwIfAborted()
     setPreviewUrl(imageUrl)
-    const id = record.task ? `comfy:${record.task.baseUrl}:${record.task.promptId}` : crypto.randomUUID()
+    const id = record.task ? `comfy:${record.task.baseUrl}:${record.task.promptId}` : safeRandomUUID()
     await persistHistory((current) => {
       signal.throwIfAborted()
       return [{ id, createdAt: Date.now(), imageUrl, provider: result.providerUsed, model: result.modelUsed, prompt: record.prompt, recipeSummary: record.summary, snapshot: record.snapshot }, ...current.filter((x) => x.id !== id)].slice(0, 30)

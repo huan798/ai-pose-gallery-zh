@@ -1,6 +1,7 @@
 import type { ApiConfig, ExtraReferenceImage, ImageProviderId, RecipeState } from '@/types/gallery'
 import { applyWorkflowOverrides, getWorkflowImages, validateReferenceCombinations, workflowIdentity, type ComfyObjectInfo } from '@/lib/comfyWorkflowParameters'
 import { poseImagePath, referenceImageUrl } from '@/lib/recipeImages'
+import { safeRandomUUID } from '@/lib/utils'
 import qwen2509ThreeImageWorkflow from '@/workflows/qwen_image_edit_2509_3img.api.json'
 
 export interface ProviderModelOption {
@@ -1512,7 +1513,7 @@ async function generateWithComfyUi(params: {
   checkTrackingSignal(params.signal)
   await params.onSubmitting?.({ workflow: JSON.parse(JSON.stringify(workflow)) })
   checkTrackingSignal(params.signal)
-  const clientId = `pose_studio_${crypto.randomUUID()}`
+  const clientId = `pose_studio_${safeRandomUUID()}`
   const submittedAt = Date.now()
   report({ stage: 'queue', message: '正在提交工作流…' })
   // Subscribe before submission; HTTP reconciliation covers events received before prompt_id is known.
@@ -1877,7 +1878,9 @@ export async function generateCharacterImage(params: {
     json = await res.json()
   }
   // =========================================================================
-  // 协议 5: Grsai 聚合接口 (/v1/api/generate + /v1/api/result 异步轮询)
+  // 协议 5: Grsai 聚合接口 (/v1/api/generate 流式 SSE + /v1/api/result 轮询兜底)
+  // 说明：gpt-image 系列同步生成可超过 180s，json 模式会被 Cloudflare 100s 空闲超时掐断 (524)，
+  // 因此统一使用 replyType=stream，SSE 持续有数据流动不会触发空闲超时，且可实时上报进度。
   // =========================================================================
   else if (provider === 'grsai') {
     const gs = config.grsaiParams
@@ -1887,7 +1890,7 @@ export async function generateCharacterImage(params: {
       model,
       prompt,
       images: allImageRefs,
-      replyType: 'json',
+      replyType: 'stream',
     }
     if (isGptImage) {
       // gpt-image 系列要求 "1024x1024" 式尺寸，由宽高比换算
@@ -1899,7 +1902,7 @@ export async function generateCharacterImage(params: {
         '16:9': '1536x1024',
       }
       body.aspectRatio = gs.aspectRatio === 'auto' ? '1024x1024' : (sizeMap[gs.aspectRatio] ?? '1024x1024')
-      if (gs.quality !== 'auto') body.quality = gs.quality
+      body.quality = gs.quality
     } else {
       // nano-banana 系列使用比例 + 分辨率档位
       body.aspectRatio = gs.aspectRatio === 'auto' ? '1:1' : gs.aspectRatio
@@ -1918,15 +1921,67 @@ export async function generateCharacterImage(params: {
       },
       config.useProxy
     )
-    json = await res.json()
+    if (!res.ok) {
+      const rawText = await res.text().catch(() => '')
+      let detail = rawText
+      try {
+        const errJson = JSON.parse(rawText)
+        detail = errJson?.error?.message || errJson?.message || errJson?.msg || errJson?.error || rawText
+      } catch { /* 保留原文 */ }
+      throw new Error(
+        `[Grsai] 请求失败 (HTTP ${res.status})${detail ? `：${String(detail).slice(0, 400)}` : '（空响应）'}`
+      )
+    }
+    if (!res.body) {
+      // 极端情况：网关不支持流式透传，退化为整体 JSON 文本解析
+      const rawText = await res.text()
+      try { json = JSON.parse(rawText) } catch {
+        throw new Error(`[Grsai] 响应不是有效 JSON：${rawText.slice(0, 200)}`)
+      }
+    } else {
+      // 解析 SSE 流：data: {...} 行，最终 chunk 携带 status=succeeded + results
+      const reader = res.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+      let lastJson: any = null
+      const deadline = Date.now() + timeoutSec * 1000
+      try {
+        while (true) {
+          if (params.signal?.aborted) throw new Error('生成已取消')
+          if (Date.now() > deadline) throw new Error(`[Grsai] 生成超时（${timeoutSec}s）`)
+          const { done, value } = await reader.read()
+          if (done) break
+          buffer += decoder.decode(value, { stream: true })
+          const lines = buffer.split('\n')
+          buffer = lines.pop() ?? ''
+          for (const line of lines) {
+            const trimmed = line.trim()
+            if (!trimmed.startsWith('data:')) continue
+            const payload = trimmed.slice(5).trim()
+            if (!payload) continue
+            try { lastJson = JSON.parse(payload) } catch { continue }
+            if (lastJson?.status === 'failed') {
+              throw new Error(`[Grsai] 任务生成失败：${lastJson?.error || '未知错误'}`)
+            }
+            if (lastJson?.status === 'running' && typeof lastJson?.progress === 'number') {
+              onProgress?.({ stage: 'running', message: `Grsai 生成中 ${lastJson.progress}%`, percent: lastJson.progress })
+            }
+          }
+        }
+      } finally {
+        try { reader.cancel() } catch { /* ignore */ }
+      }
+      json = lastJson
+      if (!json) throw new Error('[Grsai] 流式响应为空，未解析到任何任务数据')
+    }
 
-    // 异步任务：status 非 succeeded 时携带 id 轮询 /v1/api/result
-    if (res.ok && json?.id && json?.status && json.status !== 'succeeded') {
+    // 兜底：流意外中断且任务未完成时，携带 id 轮询 /v1/api/result
+    if (json?.id && json?.status && json.status !== 'succeeded') {
       const deadline = Date.now() + timeoutSec * 1000
       while (Date.now() < deadline) {
         if (params.signal?.aborted) throw new Error('生成已取消')
         await new Promise((resolve) => setTimeout(resolve, 3000))
-        onProgress?.({ stage: 'queue', message: 'Grsai 正在生成，轮询任务结果…' })
+        onProgress?.({ stage: 'queue', message: 'Grsai 连接中断，轮询任务结果…' })
         const pollRes = await smartFetch(
           `${baseUrl}/v1/api/result?id=${encodeURIComponent(json.id)}`,
           {
@@ -1935,9 +1990,13 @@ export async function generateCharacterImage(params: {
           },
           config.useProxy
         )
-        const pollJson = await pollRes.json().catch(() => null)
+        const pollRaw = await pollRes.text().catch(() => '')
+        let pollJson: any = null
+        try { pollJson = JSON.parse(pollRaw) } catch { pollJson = null }
         if (!pollRes.ok || !pollJson) {
-          throw new Error(`[Grsai] 查询任务结果失败 (HTTP ${pollRes.status})`)
+          throw new Error(
+            `[Grsai] 查询任务结果失败 (HTTP ${pollRes.status})${pollRaw ? `：${pollRaw.slice(0, 300)}` : ''}`
+          )
         }
         json = pollJson
         if (json.status === 'succeeded') break
