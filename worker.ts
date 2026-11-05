@@ -10,8 +10,13 @@ export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url)
 
-    // HTTP 一律 301 跳转 HTTPS：保证安全上下文（crypto.randomUUID 等Web API 需要）
-    if (url.protocol === 'http:') {
+    // HTTP 跳转 HTTPS（仅限页面/静态资源的 GET/HEAD；/api/* 与非 GET 一律放行，
+    // 否则 301 会把浏览器 POST 改写为 GET 并造成跨源失败）
+    if (
+      url.protocol === 'http:' &&
+      (request.method === 'GET' || request.method === 'HEAD') &&
+      !url.pathname.startsWith('/api/')
+    ) {
       url.protocol = 'https:'
       return new Response(null, { status: 301, headers: { Location: url.toString() } })
     }
